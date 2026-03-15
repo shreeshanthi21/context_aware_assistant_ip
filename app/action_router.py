@@ -168,6 +168,12 @@ class ActionRouter:
 
     # ── Cancel latest ─────────────────────────────────────────────────────────
 
+    def cancel_latest(self) -> dict:
+        pending = get_all_reminders_db(status="pending")
+        if not pending:
+            return {"reply": "You have no pending reminders to cancel."}
+        return self.cancel_by_id(pending[0]["id"])
+
     def _cancel_latest(self) -> dict:
         pending = get_all_reminders_db(status="pending")
         if not pending:
