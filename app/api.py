@@ -1,9 +1,12 @@
-from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from .assistant_service import run_assistant, chat_history, router, memory
+from fastapi import FastAPI, HTTPException, Depends
 
-app = FastAPI(title="Context-Aware Assistant API", version="3.0")
+from pydantic import BaseModel
+
+from .assistant_service import run_assistant, chat_history, router, memory
+from .auth import get_current_user, create_token
+
+app = FastAPI(title="Context-Aware Assistant API", version="4.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -17,19 +20,43 @@ class ChatRequest(BaseModel):
     message: str
 
 
-# ── Chat ──────────────────────────────────────────────────────────────────────
+class LoginRequest(BaseModel):
+    user_id: str
 
-@app.get("/")
-def root():
-    return {"status": "running", "version": "3.0"}
 
+# ── Login ─────────────────────────────
+
+@app.post("/login")
+def login(req: LoginRequest):
+
+    token = create_token(req.user_id)
+
+    return {
+        "token": token,
+        "user_id": req.user_id
+    }
+
+
+# ── Chat ─────────────────────────────
 
 @app.post("/chat")
-def chat(req: ChatRequest):
-    if not req.message.strip():
-        raise HTTPException(status_code=400, detail="Message cannot be empty.")
-    return run_assistant(req.message)
+def chat(
+    req: ChatRequest,
+    user_id: str = Depends(get_current_user)
+):
 
+    if not req.message.strip():
+        raise HTTPException(status_code=400)
+
+    result = run_assistant(req.message, user_id)
+
+    return {
+        "reply": result
+    }
+
+
+
+# ── History ─────────────────────────────
 
 @app.get("/history")
 def get_history():
@@ -42,46 +69,41 @@ def clear_history():
     return {"message": "History cleared."}
 
 
-# ── Reminders ─────────────────────────────────────────────────────────────────
+# ── Reminders ─────────────────────────
 
 @app.get("/reminders")
-def get_reminders(status: str = None):
-    reminders = router.get_all_reminders(status=status)
-    return {"reminders": reminders, "count": len(reminders)}
+def get_reminders(
+    status: str = None,
+    user_id: str = Depends(get_current_user)
+):
+
+    reminders = router.get_all_reminders(user_id=user_id, status=status)
+
+    return {"reminders": reminders}
 
 
 @app.delete("/reminders/{reminder_id}")
-def cancel_reminder(reminder_id: str):
+def cancel_reminder(
+    reminder_id: str,
+    user_id: str = Depends(get_current_user)
+):
+
     result = router.cancel_by_id(reminder_id)
+
     if "error" in result:
-        raise HTTPException(status_code=400, detail=result["error"])
+        raise HTTPException(status_code=400)
+
     return result
 
 
-# ── Memory ────────────────────────────────────────────────────────────────────
+# ── Memory ─────────────────────────
 
 @app.get("/memory/{memory_type}")
 def get_memory(memory_type: str):
-    """
-    memory_type: general | preference | habit
-    Returns all stored entries for that collection.
-    """
+
     valid = ("general", "preference", "habit")
+
     if memory_type not in valid:
-        raise HTTPException(status_code=400, detail=f"memory_type must be one of {valid}")
-    return {"type": memory_type, "entries": memory.get_all(memory_type)}
+        raise HTTPException(status_code=400)
 
-
-@app.delete("/memory/{memory_type}/{memory_id}")
-def delete_memory(memory_type: str, memory_id: str):
-    success = memory.delete(memory_id, memory_type)
-    if not success:
-        raise HTTPException(status_code=404, detail="Memory entry not found.")
-    return {"message": "Deleted."}
-
-
-@app.delete("/reminders")
-def cancel_latest():
-    """Cancel the most recently created pending reminder."""
-    result = router.cancel_latest()
-    return result
+    return {"entries": memory.get_all(memory_type)}
